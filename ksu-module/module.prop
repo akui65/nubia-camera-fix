@@ -1,0 +1,6 @@
+id=morpho_expiry_bypass
+name=Morpho Video Stabilizer Expiry Bypass
+version=1.2
+versionCode=3
+author=Hell'C
+description=通过替换 /vendor/lib64/libmorpho_video_stabilizer.so（仅此一个文件），绕过 Morpho 视频防抖库的 GMT 过期自毁校验（SIGILL），使努比亚原相机在 HyperOS 4 移植包上可正常使用防抖。
