@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.camera.immersionfix"
-    android:versionCode="14"
-    android:versionName="2.3">
+    android:versionCode="15"
+    android:versionName="2.4">
 
     <application
         android:label="Camera Immersion Fix"
@@ -15,7 +15,7 @@
             android:value="true" />
         <meta-data
             android:name="xposeddescription"
-            android:value="修复努比亚原相机在 HyperOS 4 移植包上的启动崩溃与界面问题：ImmersionMode 布尔值归一化、防抖抽屉初始化、底部三键/模式栏布局微调。作用域：com.android.camera" />
+            android:value="修复努比亚原相机在 HyperOS 4 移植包上的启动崩溃与界面问题：ImmersionMode 布尔值归一化、防抖抽屉初始化、底部三键/模式栏布局微调；关闭“近焦切换控制”后强制停止 HAL 近距离切广角。作用域：com.android.camera" />
         <meta-data
             android:name="xposedauthor"
             android:value="Hell'C" />

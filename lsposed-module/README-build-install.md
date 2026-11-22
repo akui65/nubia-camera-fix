@@ -1,6 +1,6 @@
 ﻿# Camera Immersion Fix（LSPosed 模块）
 
-## 作用（v2.3）
+## 作用（v2.4）
 仅对 `com.android.camera` 生效。当前包含以下 hook：
 
 1. `cn.nubia.camera.nubiacameraconfig.Config#getIntValue(Map, Feature, String)` 的布尔字符串归一化（ImmersionMode 防崩必需）：
@@ -18,6 +18,18 @@
 9. `VideoFragment.onVideoStartBegin` after：录像专用两套布局 `mBottomRecordingButtonLayout` / `mBottomPreRecordingButtonLayout` 的 `bottomMargin += 42dp`（竖屏）。
 10. `VideoMemberFragment.startVideoRecord` after：展开状态下开始录像时收起抽屉。
 11. `MemberFragment` / `TopBarFragment#dispatchTouchEvent` after：抽屉展开时点击抽屉外部收起（不吞事件，仅 ACTION_UP 判断）。
+12. 近焦切换（v2.4）：`NormalParametersItem#isSatFallBackClose` 在「近焦切换控制=关」时返回 true，下发 `com.zte.chi.sat.fallbackclose=1`；`getSatFallBackMode` 同期强制返回 4/5，阻止 HAL 近距离切广角。
+
+## v2.4 变更（近焦切换控制失效）
+实机现象：设置里关闭「近焦切换控制」后，35mm 主摄近距离仍自动切到 18mm 广角。
+
+定位结论：APK 侧链路正常。`getSatFallBackMode()` 在 macro=`off` 时返回 5，由 `ParametersSetter#setSatFallBackMode` 写入 `com.zte.chi.sat.fallbackmode`；`QuickFallbackController` 在 macro=`off` 时把 AF 阈值置 -1，APP 自身不切镜头。真正切镜头的是 CHI/HAL 的 SAT 回退，而 APK 中另一个硬开关 `com.zte.chi.sat.fallbackclose` 从未被置 true（`setSatFallBackClose` 零调用者）。
+
+v2.4 处理（仅在 `pref_camera_macro_ai_control_key == "off"` 时介入，其它取值保持原厂）：
+1. `NormalParametersItem#isSatFallBackClose()` after 返回 `true` → 随请求下发 `com.zte.chi.sat.fallbackclose=1`。
+2. `NormalParametersItem#getSatFallBackMode()` after 按暗光开关强制为 4（暗光关）或 5（暗光开），避免被 cameraId/支持类型判断降级为 0。
+
+副作用：关闭后 35mm 主摄不再自动切超广角，比主摄最近对焦距离更近的物体会无法合焦，需要手动切 0.6x/微距模式。
 
 ## v2.3 变更（v2.1 实机复验后的修正）
 v2.1 实机复验结果：
@@ -172,10 +184,10 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 ```
 
 产物：
-`...\camera-launch-diagnosis\outputs\CameraImmersionFix-LSPosed-v2.3.apk`
+`...\camera-launch-diagnosis\outputs\CameraImmersionFix-LSPosed-v2.4.apk`
 
 ## 安装与启用（需用户手动操作）
-1. 安装：`adb install -r CameraImmersionFix-LSPosed-v2.3.apk`
+1. 安装：`adb install -r CameraImmersionFix-LSPosed-v2.4.apk`
 2. 打开 LSPosed 管理器 → 模块 → 启用 “Camera Immersion Fix”。
 3. 作用域勾选 `com.android.camera`（Manifest 已声明 xposedscope，若未自动带入则手动勾选）。
 4. **强制停止相机**（或重启手机），再打开相机。
@@ -243,7 +255,7 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 本项目交付物是 **LSPosed 模块 APK**，不是 KSU 模块 zip，因此模板中的 `module.prop`、`customize.sh`、`service.sh`、LF/0755、Python zipfile 打包、APK 放 `files/` 等规范不适用。
 已遵循的相关规范：
 - 中文路径：构建前把工程复制到 `%TEMP%\camera_immersion_fix_build`（ASCII），在暂存目录用相对路径调用 aapt2/zipalign/apksigner，产物再拷回 outputs。
-- 版本化产物命名：`CameraImmersionFix-LSPosed-v2.3.apk`。
+- 版本化产物命名：`CameraImmersionFix-LSPosed-v2.4.apk`。
 - 不使用 PowerShell `Compress-Archive`；dex 写入用 .NET ZipFile，签名用 apksigner。
 - README 包含功能、构建、安装、验证、回滚、故障排查。
 

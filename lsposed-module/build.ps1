@@ -90,9 +90,9 @@ try {
     Write-Host '[8/8] apksigner sign/verify'
     & $apksigner sign --ks debug.keystore --ks-key-alias camerafix --ks-pass pass:android --key-pass pass:android `
         --min-sdk-version 21 --v1-signing-enabled true --v2-signing-enabled true `
-        --out build\CameraImmersionFix-LSPosed-v2.3.apk build\aligned.apk
+        --out build\CameraImmersionFix-LSPosed-v2.4.apk build\aligned.apk
     if ($LASTEXITCODE -ne 0) { throw 'apksigner sign failed' }
-    & $apksigner verify --print-certs build\CameraImmersionFix-LSPosed-v2.3.apk
+    & $apksigner verify --print-certs build\CameraImmersionFix-LSPosed-v2.4.apk
     if ($LASTEXITCODE -ne 0) { throw 'apksigner verify failed' }
 } finally {
     Pop-Location
@@ -103,16 +103,15 @@ if (-not (Test-Path $ksSrc) -and (Test-Path $ksDst)) {
     Copy-Item $ksDst $ksSrc -Force
 }
 
-$outDir = [System.IO.Path]::GetFullPath((Join-Path $root '..\release'))
+$outDir = [System.IO.Path]::GetFullPath((Join-Path $root '..\..\outputs'))
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-$final = Join-Path $outDir 'CameraImmersionFix-LSPosed-v2.3.apk'
-Copy-Item "$build\CameraImmersionFix-LSPosed-v2.3.apk" $final -Force
+$final = Join-Path $outDir 'CameraImmersionFix-LSPosed-v2.4.apk'
+Copy-Item "$build\CameraImmersionFix-LSPosed-v2.4.apk" $final -Force
 
 $size = (Get-Item $final).Length
 Write-Host ''
 Write-Host "BUILD OK: $final"
 Write-Host "SIZE: $size bytes"
-
 
 
 

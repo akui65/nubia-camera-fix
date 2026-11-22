@@ -7,7 +7,7 @@
 | 模块 | 类型 | 作用 |
 |---|---|---|
 | `CameraMorphoExpiryBypass` | KernelSU / ReSukiSU 模块 | 替换 `/vendor/lib64/libmorpho_video_stabilizer.so`，绕过 Morpho 防抖库的 GMT 过期自毁校验（SIGILL） |
-| `CameraImmersionFix` | LSPosed 模块 | 修复相机启动崩溃（ImmersionMode）、防抖抽屉初始化、底部布局微调 |
+| `CameraImmersionFix` | LSPosed 模块 | 修复相机启动崩溃（ImmersionMode）、防抖抽屉初始化、底部布局微调；关闭“近焦切换控制”后阻止 HAL 近距离切广角 |
 
 作者：**Hell'C**
 
@@ -18,6 +18,7 @@
 1. **启动即崩**：`Config.getImmersionMode` 调用 `getIntValue`，对 `"true"` 执行 `Integer.parseInt`，抛 `NumberFormatException`。
 2. **录像 SIGILL**：Morpho EIS 库内置 GMT 截止日期，移植包中已过期，校验失败后跳到非法地址。
 3. **防抖不可用**：`TopBarFragment` 漏调 `initAnime`，顶栏抽屉从未创建；点击手型图标触发 `mShowAnimSet.start()` NPE。
+4. **近焦误切换**：设置里关闭“近焦切换控制”后，35mm 主摄近距离仍会切到 18mm 广角。APK 已下发 `com.zte.chi.sat.fallbackmode=5`，但硬开关 `com.zte.chi.sat.fallbackclose` 从未被置位；v2.4 在宏关闭时补发该标志，并强制 fallbackmode=4/5。
 
 完整根因、证据与实现原理见 [docs/修复全流程.md](docs/修复全流程.md)。
 
@@ -42,13 +43,13 @@ nubia-camera-fix/
 │   └── system/vendor/lib64/libmorpho_video_stabilizer.so
 └── release/
     ├── CameraMorphoExpiryBypass-v1.2.zip
-    └── CameraImmersionFix-LSPosed-v2.3.apk
+    └── CameraImmersionFix-LSPosed-v2.4.apk
 ```
 
 ## 安装（顺序不能反）
 
 1. **先装 KSU 模块**：在 KernelSU / ReSukiSU 管理器中安装 `release/CameraMorphoExpiryBypass-v1.2.zip`，然后 **重启手机**。
-2. **再装 LSPosed 模块**：`adb install -r release/CameraImmersionFix-LSPosed-v2.3.apk`，在 LSPosed 中启用并将作用域勾选 `com.android.camera`。
+2. **再装 LSPosed 模块**：`adb install -r release/CameraImmersionFix-LSPosed-v2.4.apk`，在 LSPosed 中启用并将作用域勾选 `com.android.camera`。
 3. **强制停止相机**后重新打开：
    ```
    adb shell am force-stop com.android.camera

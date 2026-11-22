@@ -57,6 +57,21 @@ import java.util.WeakHashMap;
  * v1.5 的 playShowAnim 空值保护保留：若初始化因任何原因未执行，
  * 点击仍只是无动画，不会闪退。
  *
+ * v2.4：修复“近焦切换控制=关 后，35mm 主摄近距离仍自动切 18mm 广角”。
+ * 反编译确认 APK 侧链路是通的：
+ *   - NormalParametersItem#getSatFallBackMode 在 macro=off 时返回 4/5，
+ *     由 ParametersSetter#setSatFallBackMode 写入 com.zte.chi.sat.fallbackmode；
+ *   - QuickFallbackController 在 macro=off 时把 AF 阈值置 -1，APP 自身不切镜头；
+ *   - 镜头切换由 CHI/HAL 的 SAT 回退完成。
+ * 但 APK 内还有一个从未被置 true 的硬开关 com.zte.chi.sat.fallbackclose
+ * （NormalParametersItem#isSatFallBackClose 永远返回字段默认 false），
+ * 且 HAL 对 fallbackmode=4/5 的处理无法从 APK 侧证明。
+ * 因此本版只在 macro=off 时做两件事：
+ *   1. isSatFallBackClose() 返回 true -> 下发 com.zte.chi.sat.fallbackclose=1；
+ *   2. getSatFallBackMode() 强制返回 4（暗光关）或 5（暗光开），
+ *      避免因 cameraId/支持类型判断走了 0 分支而丢掉“微距关”的语义。
+ * 其它取值（on / on_far / on_closer）完全不介入，保持原厂行为。
+ *
  * 目标类/方法不存在时安静退出（仅 DEBUG 时打日志），不让相机进程因模块异常崩溃。
  */
 public class CameraImmersionHook implements IXposedHookLoadPackage {
@@ -123,6 +138,19 @@ public class CameraImmersionHook implements IXposedHookLoadPackage {
     private static final String INIT_MODE_PICKER_METHOD = "initModePicker";
     private static final String MODE_PICKER_LAYOUT_ID = "mode_picker_button_layout";
 
+    /** 近焦切换相关：偏好键与 SAT 回退下发通道。 */
+    private static final String NORMAL_PARAMS_CLASS = "cn.nubia.camera.normal.NormalParametersItem";
+    private static final String MACRO_PREF_KEY = "pref_camera_macro_ai_control_key";
+    private static final String DARK_PREF_KEY = "pref_camera_dark_fallback_key";
+    private static final String EXT_LENS_PREF_KEY = "pref_neo_bar_external_lens_focal_setting_key";
+    private static final String METHOD_GET_SAT_FALLBACK_MODE = "getSatFallBackMode";
+    private static final String METHOD_IS_SAT_FALLBACK_CLOSE = "isSatFallBackClose";
+    private static final String FIELD_FORCE_STOP_MACRO = "forceStopMacroFallBackMode";
+    private static final String FIELD_FORCE_STOP_DARK = "forceStopDarkFallBackMode";
+    /** 与 NormalParametersItem 的常量保持一致：4=宏关/暗光关，5=宏关/暗光开。 */
+    private static final int SAT_FALLBACK_MACRO_OFF_DARK_OFF = 4;
+    private static final int SAT_FALLBACK_MACRO_OFF_DARK_ON = 5;
+
     /** 记录已经加过偏移的 View 及其最后一次 bottomMargin，避免重复叠加。 */
     private static final Map<View, Integer> APPLIED_MARGINS = new WeakHashMap<>();
     /** 抽屉等待 layout 的重试计数，避免重复注册 OnGlobalLayoutListener。 */
@@ -158,6 +186,147 @@ public class CameraImmersionHook implements IXposedHookLoadPackage {
         hookProModePicker(lpparam);
         hookStartRecordCollapse(lpparam);
         hookOutsideTouch(lpparam);
+        hookMacroFallbackOff(lpparam);
+    }
+
+    /**
+     * 近焦切换控制=关 时，把“关”同时落实为两条 HAL 通道：
+     *   - com.zte.chi.sat.fallbackclose = 1（硬关 SAT 回退）
+     *   - com.zte.chi.sat.fallbackmode  = 4/5（宏关；暗光按用户设置保留）
+     * 仅在偏好为 off 或框架强制停止宏回退时介入，其余设置保持原厂逻辑。
+     */
+    private static void hookMacroFallbackOff(LoadPackageParam lpparam) {
+        hookSatFallbackClose(lpparam);
+        hookSatFallbackMode(lpparam);
+    }
+
+    private static void hookSatFallbackClose(LoadPackageParam lpparam) {
+        try {
+            XposedHelpers.findAndHookMethod(
+                    NORMAL_PARAMS_CLASS,
+                    lpparam.classLoader,
+                    METHOD_IS_SAT_FALLBACK_CLOSE,
+                    new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            try {
+                                if (isMacroFallbackOff(param.thisObject)) {
+                                    param.setResult(Boolean.TRUE);
+                                    if (DEBUG) {
+                                        XposedBridge.log(TAG
+                                                + ": force sat.fallbackclose=1 (macro off)");
+                                    }
+                                }
+                            } catch (Throwable t) {
+                                logError(METHOD_IS_SAT_FALLBACK_CLOSE + "-after", t);
+                            }
+                        }
+                    });
+            logHooked(NORMAL_PARAMS_CLASS, METHOD_IS_SAT_FALLBACK_CLOSE);
+        } catch (Throwable t) {
+            logTargetMissing(METHOD_IS_SAT_FALLBACK_CLOSE, t);
+        }
+    }
+
+    private static void hookSatFallbackMode(LoadPackageParam lpparam) {
+        try {
+            XposedHelpers.findAndHookMethod(
+                    NORMAL_PARAMS_CLASS,
+                    lpparam.classLoader,
+                    METHOD_GET_SAT_FALLBACK_MODE,
+                    new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            try {
+                                if (!isMacroFallbackOff(param.thisObject)) {
+                                    return;
+                                }
+                                int mode = buildMacroOffFallbackMode(param.thisObject);
+                                Object old = param.getResult();
+                                if (!(old instanceof Integer)
+                                        || ((Integer) old).intValue() != mode) {
+                                    param.setResult(Integer.valueOf(mode));
+                                    if (DEBUG) {
+                                        XposedBridge.log(TAG + ": sat.fallbackmode "
+                                                + old + " -> " + mode + " (macro off)");
+                                    }
+                                }
+                            } catch (Throwable t) {
+                                logError(METHOD_GET_SAT_FALLBACK_MODE + "-after", t);
+                            }
+                        }
+                    });
+            logHooked(NORMAL_PARAMS_CLASS, METHOD_GET_SAT_FALLBACK_MODE);
+        } catch (Throwable t) {
+            logTargetMissing(METHOD_GET_SAT_FALLBACK_MODE, t);
+        }
+    }
+
+    /**
+     * 复刻 NormalParametersItem 在宏关闭时的取值：外接镜头存在时不做 SAT 回退（0），
+     * 否则按暗光开关返回 4/5。原方法的 cameraId/支持类型前置判断若把结果降级成 0，
+     * 这里会纠正过来，保证 HAL 收到明确的“宏关”语义。
+     */
+    private static int buildMacroOffFallbackMode(Object item) {
+        String lens = prefString(item, EXT_LENS_PREF_KEY, "none");
+        if (lens != null && !"none".equals(lens)) {
+            return 0;
+        }
+        boolean darkOn;
+        try {
+            darkOn = Boolean.TRUE.equals(XposedHelpers.getObjectField(item, FIELD_FORCE_STOP_DARK))
+                    ? false
+                    : "on".equals(prefString(item, DARK_PREF_KEY, darkDefault(item)));
+        } catch (Throwable t) {
+            darkOn = "on".equals(prefString(item, DARK_PREF_KEY, darkDefault(item)));
+        }
+        return darkOn ? SAT_FALLBACK_MACRO_OFF_DARK_ON : SAT_FALLBACK_MACRO_OFF_DARK_OFF;
+    }
+
+    /**
+     * 宏回退是否处于“关”：用户显式选择 off，或框架已强制停止宏回退。
+     * 偏好读取失败时返回 false，保持原厂行为，不做任何接管。
+     */
+    private static boolean isMacroFallbackOff(Object item) {
+        try {
+            Object forced = XposedHelpers.getObjectField(item, FIELD_FORCE_STOP_MACRO);
+            if (Boolean.TRUE.equals(forced)) {
+                return true;
+            }
+        } catch (Throwable ignored) {
+            // 字段缺失时继续看偏好
+        }
+        try {
+            return "off".equals(prefString(item, MACRO_PREF_KEY, ""));
+        } catch (Throwable t) {
+            logError("isMacroFallbackOff", t);
+            return false;
+        }
+    }
+
+    private static String prefString(Object item, String key, String def) {
+        Object prefs = XposedHelpers.callMethod(item, "getPreferences");
+        if (prefs == null) {
+            return null;
+        }
+        Object value = XposedHelpers.callMethod(prefs, "getString", key, def);
+        return (value instanceof String) ? (String) value : null;
+    }
+
+    /** Config.getDarkFallBackDefaultValue() 的默认值；取不到时退回 off。 */
+    private static String darkDefault(Object item) {
+        try {
+            ClassLoader cl = item != null ? item.getClass().getClassLoader() : null;
+            Class<?> configClass = Class.forName(CONFIG_CLASS, false, cl);
+            Object config = configClass.getMethod("getInstance").invoke(null);
+            Object value = configClass.getMethod("getDarkFallBackDefaultValue").invoke(config);
+            if (value instanceof String) {
+                return (String) value;
+            }
+        } catch (Throwable ignored) {
+            // 取不到默认值：按 off 处理，避免误开暗光回退
+        }
+        return "off";
     }
 
     private static void hookGetIntValue(LoadPackageParam lpparam) {
